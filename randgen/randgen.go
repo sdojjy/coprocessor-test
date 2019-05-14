@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/pingcap/tidb/types/parser_driver"
@@ -31,7 +32,6 @@ func GenData(sql []byte, count int) string {
 
 	var insert bytes.Buffer
 	insert.WriteString("SET time_zone='+00:00';\n")
-
 	for _, stmt := range stmts {
 		createTable, ok := stmt.(*ast.CreateTableStmt)
 		if !ok {
@@ -39,50 +39,199 @@ func GenData(sql []byte, count int) string {
 			continue
 		}
 
-		config := genConfig{}
+		config := genConfig{dataFunc: make(map[string]*indexTuple)}
 		for _, col := range createTable.Cols {
 			fillFlags(col)
-			config.dataFunc = append(config.dataFunc, indexTuple{max: len(dataTypeRandGenFunMap[col.Tp.Tp]), current: 0})
+			config.dataFunc[col.Name.Name.O] = &indexTuple{max: len(dataTypeRandGenFunMap[col.Tp.Tp]), current: 0}
 		}
 
-		var idStart = -count / 2
-		for i := 0; i < count; i++ {
-			insert.WriteString("insert into `")
-			insert.WriteString(createTable.Table.Name.O)
-			insert.WriteString("` (")
-			for index, col := range createTable.Cols {
-				insert.WriteString(col.Name.Name.O)
-				if index < len(createTable.Cols)-1 {
-					insert.WriteString(",")
+		var columnDataMap = map[string]*columnData{}
+		for _, col := range createTable.Cols {
+			columnDataMap[col.Name.Name.O] = &columnData{filled: false, data: make([]string, count)}
+		}
+
+		var columnMap = map[string]*ast.ColumnDef{}
+		for _, col := range createTable.Cols {
+			columnMap[col.Name.Name.O] = col
+		}
+
+		//fill column with constraint first
+		for _, constraint := range createTable.Constraints {
+			switch constraint.Tp {
+			case ast.ConstraintPrimaryKey:
+				cname := constraint.Keys[0].Column.Name.O
+				cdata := columnDataMap[cname]
+				cdata.filled = true
+				col := columnMap[cname]
+				funcSlice := dataTypeRandGenFunMap[col.Tp.Tp]
+				cornerCaseStart := 0
+				cornerCaseEnd := len(funcSlice) - 2
+				unsigned := mysql.HasUnsignedFlag(col.Tp.Flag)
+
+				var idStart = -count / 2
+				for i := 0; i < count; i++ {
+					if cornerCaseStart <= cornerCaseEnd {
+						cdata.data[i] = funcSlice[cornerCaseStart](getTypeLen(col))
+						cornerCaseStart++
+					} else {
+						if !unsigned {
+							if idStart == 0 { //avoid duplicate key '1'
+								idStart++
+							}
+							cdata.data[i] = fmt.Sprintf("'%d'", idStart)
+						} else {
+							cdata.data[i] = fmt.Sprintf("'%d'", idStart+count/2+1)
+						}
+						idStart++
+					}
+				}
+			case ast.ConstraintIndex:
+				valueSet := getUniqueValueSet(constraint, int(float32(count)*0.4), columnMap, config)
+				data := valueSet.toSlice()
+				for index, item := range data {
+					valueStr := item.(string)
+					value := strings.Split(valueStr, "|")
+					for keyIndex, key := range constraint.Keys {
+						cname := key.Column.Name.O
+						cdata := columnDataMap[cname]
+						cdata.filled = true
+						cdata.data[index] = value[keyIndex]
+					}
+				}
+				dataLen := len(data)
+				for i := 0; i < count-dataLen; i++ {
+					item := data[rand.Intn(dataLen)]
+					valueStr := item.(string)
+					value := strings.Split(valueStr, "|")
+					for keyIndex, key := range constraint.Keys {
+						cname := key.Column.Name.O
+						cdata := columnDataMap[cname]
+						cdata.filled = true
+						cdata.data[dataLen+i] = value[keyIndex]
+					}
+				}
+
+			case ast.ConstraintUniq:
+				valueSet := getUniqueValueSet(constraint, count, columnMap, config)
+				for index, item := range valueSet.toSlice() {
+					valueStr := item.(string)
+					value := strings.Split(valueStr, "|")
+					for keyIndex, key := range constraint.Keys {
+						cname := key.Column.Name.O
+						cdata := columnDataMap[cname]
+						cdata.filled = true
+						cdata.data[index] = value[keyIndex]
+					}
 				}
 			}
-			insert.WriteString(") values ( ")
-			for index, col := range createTable.Cols {
-				if col.Name.Name.O == "id" {
-					if !mysql.HasUnsignedFlag(col.Tp.Flag) {
-						if idStart == 0 { //avoid duplicate key '1'
-							idStart++
-						}
-						insert.WriteString(fmt.Sprintf("'%d'", idStart))
-					} else {
-						insert.WriteString(fmt.Sprintf("'%d'", idStart+count/2))
+		}
+
+		//fill normal column
+		for _, col := range createTable.Cols {
+			cdata := columnDataMap[col.Name.Name.O]
+			if !cdata.filled {
+				funcSlice := dataTypeRandGenFunMap[col.Tp.Tp]
+				max := len(dataTypeRandGenFunMap[col.Tp.Tp]) - 1
+				funcIndex := 0
+				for i := 0; i < count; i++ {
+					if funcIndex >= max {
+						funcIndex = max
 					}
-					idStart++
-				} else {
-					funcSlice := dataTypeRandGenFunMap[col.Tp.Tp]
-					funcIndex := config.getColFuncIndex(index)
-					if funcIndex < config.dataFunc[index].max {
-						config.dataFunc[index].current = funcIndex + 1
-					}
-					insert.WriteString(funcSlice[funcIndex](getTypeLen(col)))
+					cdata.data[i] = funcSlice[funcIndex](getTypeLen(col))
+					funcIndex++
 				}
+			}
+		}
+
+		var insertHeader = getInsertHeader(createTable)
+		for i := 0; i < count; i++ {
+			insert.WriteString(insertHeader)
+			for index, col := range createTable.Cols {
+				cdata := columnDataMap[col.Name.Name.O]
+				insert.WriteString(cdata.data[i])
 				if index < len(createTable.Cols)-1 {
 					insert.WriteString(",")
 				}
 			}
 			insert.WriteString(");\n")
 		}
+
+		//var idStart = -count / 2
+		//for i := 0; i < count; i++ {
+		//
+		//	insert.WriteString("insert into `")
+		//	insert.WriteString(createTable.Table.Name.O)
+		//	insert.WriteString("` (")
+		//	for index, col := range createTable.Cols {
+		//		insert.WriteString(col.Name.Name.O)
+		//		if index < len(createTable.Cols)-1 {
+		//			insert.WriteString(",")
+		//		}
+		//	}
+		//	insert.WriteString(") values ( ")
+		//	for index, col := range createTable.Cols {
+		//		if col.Name.Name.O == "id" {
+		//			if !mysql.HasUnsignedFlag(col.Tp.Flag) {
+		//				if idStart == 0 { //avoid duplicate key '1'
+		//					idStart++
+		//				}
+		//				insert.WriteString(fmt.Sprintf("'%d'", idStart))
+		//			} else {
+		//				insert.WriteString(fmt.Sprintf("'%d'", idStart+count/2))
+		//			}
+		//			idStart++
+		//		} else {
+		//			funcSlice := dataTypeRandGenFunMap[col.Tp.Tp]
+		//			funcIndex := config.getColFuncIndex(index)
+		//			if funcIndex < config.dataFunc[index].max {
+		//				config.dataFunc[index].current = funcIndex + 1
+		//			}
+		//			insert.WriteString(funcSlice[funcIndex](getTypeLen(col)))
+		//		}
+		//		if index < len(createTable.Cols)-1 {
+		//			insert.WriteString(",")
+		//		}
+		//	}
+		//	insert.WriteString(");\n")
+		//}
 	}
+	return insert.String()
+}
+
+func getUniqueValueSet(constraint *ast.Constraint, count int, columnMap map[string]*ast.ColumnDef, config genConfig) *Set {
+	keys := constraint.Keys
+	valueSet := New()
+	for valueSet.Size() < count {
+		var uniqueColumnsData bytes.Buffer
+		for _, key := range keys {
+			cname := key.Column.Name.O
+			col := columnMap[cname]
+			funcSlice := dataTypeRandGenFunMap[col.Tp.Tp]
+			funcIndex := config.getColFuncIndex(cname)
+			if funcIndex < config.dataFunc[cname].max {
+				config.dataFunc[cname].current = funcIndex + 1
+			}
+			uniqueColumnsData.WriteString(funcSlice[funcIndex](getTypeLen(col)))
+			uniqueColumnsData.WriteString("|")
+		}
+		valueSet.Put(uniqueColumnsData.String())
+	}
+	return valueSet
+}
+
+//return insert into table_name(col_1, col_2....) values (
+func getInsertHeader(createTable *ast.CreateTableStmt) string {
+	var insert bytes.Buffer
+	insert.WriteString("insert into `")
+	insert.WriteString(createTable.Table.Name.O)
+	insert.WriteString("` (")
+	for index, col := range createTable.Cols {
+		insert.WriteString(col.Name.Name.O)
+		if index < len(createTable.Cols)-1 {
+			insert.WriteString(",")
+		}
+	}
+	insert.WriteString(") values ( ")
 	return insert.String()
 }
 
@@ -144,7 +293,7 @@ func init() {
 }
 
 func randTimestamp() string {
-	return gofakeit.DateRange(time.Unix(0, 0), time.Now().Add(time.Hour*1440)).Format("2006-01-02 15:04:05")
+	return gofakeit.DateRange(time.Unix(0, 0), time.Now().Add(time.Hour*1440)).Format("2006-01-02 15:04:05.000")
 }
 
 func randString(minLen, maxLen int) string {
@@ -188,38 +337,38 @@ func generateRangeFuncArr(unsignedMin, unsignedMax, min, max string) []func(int,
 	return []func(int, int, *ast.ColumnDef) string{
 		func(flen int, dec int, col *ast.ColumnDef) string {
 			if mysql.HasUnsignedFlag(col.Tp.Flag) {
-				return unsignedMax
+				return fmt.Sprintf("'%s'", unsignedMax)
 			} else {
-				return max
+				return fmt.Sprintf("'%s'", max)
 			}
 		},
 
 		func(flen int, dec int, col *ast.ColumnDef) string {
 			if mysql.HasUnsignedFlag(col.Tp.Flag) {
-				return unsignedMin
+				return fmt.Sprintf("'%s'", unsignedMin)
 			} else {
-				return min
+				return fmt.Sprintf("'%s'", min)
 			}
 		},
 
 		func(flen int, dec int, col *ast.ColumnDef) string {
 			switch col.Tp.Tp {
 			case mysql.TypeDouble:
-				return fmt.Sprintf("'%f'", gofakeit.Float64())
+				return fmt.Sprintf("'%f'", gofakeit.Float32Range(float32(-500.9999), float32(500.9999)))
 			case mysql.TypeFloat:
-				return fmt.Sprintf("'%f'", gofakeit.Float32())
-			case mysql.TypeLonglong:
-				max := math.Min(math.Pow10(flen)-1, 0x7ffffffffffff800) // avoid dealing with float -> int rounding
-				return fmt.Sprintf("'%.0f'", gofakeit.Float64Range(0, max))
+				return fmt.Sprintf("'%f'", gofakeit.Float32Range(float32(-500.9999), float32(500.9999)))
+			//case mysql.TypeLonglong:
+			//	max := math.Min(math.Pow10(flen)-1, 0x7ffffffffffff800) // avoid dealing with float -> int rounding
+			//	return fmt.Sprintf("'%.0f'", gofakeit.Number(1, 2000))
 			default:
 				if mysql.HasUnsignedFlag(col.Tp.Flag) {
-					max, _ := strconv.ParseUint(unsignedMax, 10, 64)
-					maxf := math.Min(math.Pow10(flen)-1, float64(max))
-					return fmt.Sprintf("'%d'", rand.Intn(int(maxf)))
+					//max, _ := strconv.ParseUint(unsignedMax, 10, 64)
+					//maxf := math.Min(math.Pow10(flen)-1, float64(max))
+					return fmt.Sprintf("'%d'", gofakeit.Number(1, 4000))
 				} else {
-					max, _ := strconv.ParseInt(max, 10, 64)
-					maxf := math.Min(math.Pow10(flen)-1, float64(max))
-					return fmt.Sprintf("'%d'", rand.Intn(int(maxf)))
+					//max, _ := strconv.ParseInt(max, 10, 64)
+					//maxf := math.Min(math.Pow10(flen)-1, float64(max))
+					return fmt.Sprintf("'%d'", gofakeit.Number(-1000, 1000))
 				}
 			}
 		},
@@ -234,13 +383,13 @@ var randNullFuncArray = []func(int, int, *ast.ColumnDef) string{
 
 var randTimeStampFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
-		return "'1970-01-01 00:00:01'"
+		return "'1970-01-01 00:00:01.0000'"
 	},
 	func(flen int, dec int, col *ast.ColumnDef) string {
-		return "'2038-01-19 03:14:07'"
+		return "'2038-01-19 03:14:07.0000'"
 	},
 	func(flen int, dec int, col *ast.ColumnDef) string {
-		return "'000-00-00 00:00:00'"
+		return "'000-00-00 00:00:00.0000'"
 	},
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%s'", randTimestamp())
@@ -403,13 +552,13 @@ func minMaxNewDecimal(negative bool) func(m, d int, col *ast.ColumnDef) string {
 }
 
 type genConfig struct {
-	dataFunc []indexTuple //max, current
+	dataFunc map[string]*indexTuple //max, current
 }
 
-func (config genConfig) getColFuncIndex(colIndex int) int {
-	current := config.dataFunc[colIndex].current
-	if current >= config.dataFunc[colIndex].max {
-		return config.dataFunc[colIndex].max - 1
+func (config genConfig) getColFuncIndex(colName string) int {
+	current := config.dataFunc[colName].current
+	if current >= config.dataFunc[colName].max {
+		return config.dataFunc[colName].max - 1
 	} else {
 		return current
 	}
@@ -417,4 +566,46 @@ func (config genConfig) getColFuncIndex(colIndex int) int {
 
 type indexTuple struct {
 	max, current int
+}
+
+type columnData struct {
+	filled bool
+	data   []string
+}
+
+type Set struct {
+	m map[interface{}]struct{}
+}
+
+func (s *Set) Contains(item interface{}) bool {
+	_, ok := s.m[item]
+	return ok
+}
+
+var Exists = struct{}{}
+
+func New(items ...interface{}) *Set {
+	s := &Set{}
+	s.m = make(map[interface{}]struct{})
+	s.Put(items...)
+	return s
+}
+
+func (s *Set) Put(items ...interface{}) error {
+	for _, item := range items {
+		s.m[item] = Exists
+	}
+	return nil
+}
+
+func (s *Set) Size() int {
+	return len(s.m)
+}
+
+func (s *Set) toSlice() []interface{} {
+	var data []interface{}
+	for key, _ := range s.m {
+		data = append(data, key)
+	}
+	return data
 }
