@@ -155,45 +155,6 @@ func GenData(sql []byte, count int) string {
 			}
 			insert.WriteString(");\n")
 		}
-
-		//var idStart = -count / 2
-		//for i := 0; i < count; i++ {
-		//
-		//	insert.WriteString("insert into `")
-		//	insert.WriteString(createTable.Table.Name.O)
-		//	insert.WriteString("` (")
-		//	for index, col := range createTable.Cols {
-		//		insert.WriteString(col.Name.Name.O)
-		//		if index < len(createTable.Cols)-1 {
-		//			insert.WriteString(",")
-		//		}
-		//	}
-		//	insert.WriteString(") values ( ")
-		//	for index, col := range createTable.Cols {
-		//		if col.Name.Name.O == "id" {
-		//			if !mysql.HasUnsignedFlag(col.Tp.Flag) {
-		//				if idStart == 0 { //avoid duplicate key '1'
-		//					idStart++
-		//				}
-		//				insert.WriteString(fmt.Sprintf("'%d'", idStart))
-		//			} else {
-		//				insert.WriteString(fmt.Sprintf("'%d'", idStart+count/2))
-		//			}
-		//			idStart++
-		//		} else {
-		//			funcSlice := dataTypeRandGenFunMap[col.Tp.Tp]
-		//			funcIndex := config.getColFuncIndex(index)
-		//			if funcIndex < config.dataFunc[index].max {
-		//				config.dataFunc[index].current = funcIndex + 1
-		//			}
-		//			insert.WriteString(funcSlice[funcIndex](getTypeLen(col)))
-		//		}
-		//		if index < len(createTable.Cols)-1 {
-		//			insert.WriteString(",")
-		//		}
-		//	}
-		//	insert.WriteString(");\n")
-		//}
 	}
 	return insert.String()
 }
@@ -272,14 +233,14 @@ func init() {
 	dataTypeRandGenFunMap[mysql.TypeTimestamp] = randTimeStampFuncArray
 	dataTypeRandGenFunMap[mysql.TypeLonglong] = randLongLongFuncArray
 	dataTypeRandGenFunMap[mysql.TypeInt24] = randInt24FuncArray
-	dataTypeRandGenFunMap[mysql.TypeDate] = randDateFuncArr
-	dataTypeRandGenFunMap[mysql.TypeDuration] = randTimeFuncArr
+	dataTypeRandGenFunMap[mysql.TypeDate] = randDateFuncArray
+	dataTypeRandGenFunMap[mysql.TypeDuration] = randTimeFuncArray
 
-	dataTypeRandGenFunMap[mysql.TypeDatetime] = randDateTimeFuncArr
-	dataTypeRandGenFunMap[mysql.TypeYear] = randYearFuncArr
-	dataTypeRandGenFunMap[mysql.TypeNewDate] = randNewDateFuncArr
+	dataTypeRandGenFunMap[mysql.TypeDatetime] = randDateTimeFuncArray
+	dataTypeRandGenFunMap[mysql.TypeYear] = randYearFuncArray
+	dataTypeRandGenFunMap[mysql.TypeNewDate] = randNewDateFuncArray
 	dataTypeRandGenFunMap[mysql.TypeVarchar] = randStringFuncArray
-	dataTypeRandGenFunMap[mysql.TypeBit] = randBitFuncArr
+	dataTypeRandGenFunMap[mysql.TypeBit] = randBitFuncArray
 
 	dataTypeRandGenFunMap[mysql.TypeNewDecimal] = randNewDecimalFunArray
 
@@ -396,7 +357,7 @@ var randTimeStampFuncArray = []func(int, int, *ast.ColumnDef) string{
 	},
 }
 
-var randDateFuncArr = []func(int, int, *ast.ColumnDef) string{
+var randDateFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return "'1970-01-01'"
 	},
@@ -408,7 +369,7 @@ var randDateFuncArr = []func(int, int, *ast.ColumnDef) string{
 	},
 }
 
-var randTimeFuncArr = []func(int, int, *ast.ColumnDef) string{
+var randTimeFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return "'-838:59:59.000000'"
 	},
@@ -423,25 +384,25 @@ var randTimeFuncArr = []func(int, int, *ast.ColumnDef) string{
 	},
 }
 
-var randDateTimeFuncArr = []func(int, int, *ast.ColumnDef) string{
+var randDateTimeFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%v'", gofakeit.Date().Format("2006-01-02 15:04:05"))
 	},
 }
 
-var randYearFuncArr = []func(int, int, *ast.ColumnDef) string{
+var randYearFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%d'", gofakeit.Number(1970, 2030))
 	},
 }
 
-var randNewDateFuncArr = []func(int, int, *ast.ColumnDef) string{
+var randNewDateFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%v'", gofakeit.Date().Format("2006-01-02"))
 	},
 }
 
-var randBitFuncArr = []func(int, int, *ast.ColumnDef) string{
+var randBitFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("B'%s'", randBit(flen))
 	},
@@ -449,15 +410,27 @@ var randBitFuncArr = []func(int, int, *ast.ColumnDef) string{
 
 var randString100FuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen, d int, col *ast.ColumnDef) string {
+		if mysql.HasNotNullFlag(col.Tp.Flag) {
+			return fmt.Sprintf("'%s'", randString(4, 100))
+		}
+		return "null"
+	},
+	func(flen, d int, col *ast.ColumnDef) string {
+		return "''"
+	},
+	func(flen, d int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%s'", randString(4, 100))
 	},
 }
 var randString200FuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen, d int, col *ast.ColumnDef) string {
 		if mysql.HasNotNullFlag(col.Tp.Flag) {
-			return fmt.Sprintf("'%s'", randString(4, flen))
+			return fmt.Sprintf("'%s'", randString(4, 200))
 		}
 		return "null"
+	},
+	func(flen, d int, col *ast.ColumnDef) string {
+		return "''"
 	},
 	func(flen, d int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%s'", randString(4, 200))
@@ -466,9 +439,12 @@ var randString200FuncArray = []func(int, int, *ast.ColumnDef) string{
 var randString300FuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen, d int, col *ast.ColumnDef) string {
 		if mysql.HasNotNullFlag(col.Tp.Flag) {
-			return fmt.Sprintf("'%s'", randString(4, flen))
+			return fmt.Sprintf("'%s'", randString(4, 300))
 		}
 		return "null"
+	},
+	func(flen, d int, col *ast.ColumnDef) string {
+		return "''"
 	},
 	func(flen, d int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%s'", randString(4, 300))
@@ -480,6 +456,9 @@ var randStringFuncArray = []func(int, int, *ast.ColumnDef) string{
 			return fmt.Sprintf("'%s'", randString(4, flen))
 		}
 		return "null"
+	},
+	func(flen, d int, col *ast.ColumnDef) string {
+		return "''"
 	},
 	func(flen, d int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%s'", randString(4, flen))
