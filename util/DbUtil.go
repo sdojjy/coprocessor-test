@@ -22,7 +22,13 @@ func OpenDBWithRetry(driverName, dataSourceName string) (mdb *sql.DB, err error)
 			time.Sleep(sleepTime)
 			continue
 		}
-		break
+		err = mdb.Ping()
+		if err == nil {
+			break
+		}
+		log.Warnf("ping db failed, retry count %d err %v", i, err)
+		mdb.Close()
+		time.Sleep(sleepTime)
 	}
 	if err != nil {
 		log.Errorf("open db failed %v, take time %v", err, time.Since(startTime))

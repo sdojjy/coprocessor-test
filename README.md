@@ -30,8 +30,10 @@ tests  # case 根目录
 
 ```bash
 # dsn1 和 dsn2 分别表示要对比执行的两个数据库，可以是 tidb 和 mysql
-# test-dir 指定test case 的 base 目录
- go run main.go --dsn1=root:@tcp\(127.0.0.1:4000\)/test?charset=utf8 --dsn2==root:@tcp\(127.0.0.1:3306\)/test?charset=utf8 --test-dir=./tests/
+# dsn1 默认值为 root:@tcp(127.0.0.1:4000)/test?charset=utf8
+# dsn1 默认值为 root:@tcp(127.0.0.1:3306)/test?charset=utf8
+# test-dir 指定test case 的 base 目录， 默认值为当前目录的./tests/
+ go run main.go --dsn1=<tidb-dsn> --dsn2==<mysql-dsn> --test-dir=<case-dir> 
 ```
 
 ## TODO
