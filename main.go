@@ -30,7 +30,7 @@ func main() {
 	flag.BoolVar(&cliArgs.strictMode, "strict", true, "compare the sql result line by line with order")
 
 	flag.BoolVar(&cliArgs.genData, "gen-data", false, "generate rand data base on the DML file")
-	flag.StringVar(&cliArgs.dmlFile, "dml", "./dml.sql", "the create table statements file")
+	flag.StringVar(&cliArgs.dmlFile, "ddl", "./ddl.sql", "the create table statements file")
 	flag.IntVar(&cliArgs.recordSize, "records", 1000, "record count")
 	flag.Parse()
 

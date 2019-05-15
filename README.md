@@ -4,11 +4,11 @@
 
 ```bash
 # --gen-data 为 true 时会根据传入的表结构生成随机数据， 否则会执行对比测试
-# --dml=dml.sql 表结构文档，可以参考 dml.sql
+# --ddl=ddl.sql 表结构文档，可以参考 ddl.sql
 # --records=1000 每个表生成的数据条数， 默认1000
 # 结果输出到标准输出，可根据需要重定向到文件
 # example:
- go run main.go --gen-data=true --dml=dml.sql --records=1000 > rand-data.sql
+ go run main.go --gen-data=true --ddl=ddl.sql --records=1000 > rand-data.sql
 ```
 
 测试文件组织结构
@@ -16,11 +16,11 @@
 ```bash
 tests  # case 根目录
 ├── case1  # case1 目录
-│   ├── dml.sql  # 数据文件，执行case 1 前会执行dml.sql进行数据清理和插入，名字必须是dml.sql
+│   ├── ddl.sql  # 数据文件，执行case 1 前会执行dml.sql进行数据清理和插入，名字必须是dml.sql
 │   ├── query.sql # sql 查询语句，程序会对比每一条语句的结果 
 │   └── query2.sql
 └── case2 # case 2 目录
-    ├── dml.sql
+    ├── ddl.sql
     └── query.sql
 
 ```
