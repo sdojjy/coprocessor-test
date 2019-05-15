@@ -33,11 +33,12 @@ tests  # case 根目录
 # dsn1 默认值为 root:@tcp(127.0.0.1:4000)/test?charset=utf8
 # dsn1 默认值为 root:@tcp(127.0.0.1:3306)/test?charset=utf8
 # test-dir 指定test case 的 base 目录， 默认值为当前目录的./tests/
+# strict 是否做严格的比较(结果顺序一致), 默认为 true， 否则尝试不比较顺序
  go run main.go --dsn1=<tidb-dsn> --dsn2==<mysql-dsn> --test-dir=<case-dir> 
 ```
 
 ## TODO
 
-- 随机数据生成优化
-- 更多边界值支持
-- 执行结果对比完善
+-[ ] 随机数据生成优化
+-[ ] 更多边界值支持
+-[ ] 执行结果对比完善

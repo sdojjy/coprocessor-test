@@ -33,46 +33,19 @@ func compareQuery(query string) {
 		log.Error("execute failed on both one db", zap.String("query", query), zap.String("err1", fmt.Sprintf("%v", err1)), zap.String("err2", fmt.Sprintf("%v", err2)))
 		failedQuery[currentCase] = append(failedQuery[currentCase], query)
 	} else {
-		queryData1 := result1.data
-		queryData2 := result2.data
-		if len(queryData1) != len(queryData2) {
-			log.Info("result length not equals", zap.Int("db1", len(queryData1)), zap.Int("db2", len(queryData2)))
-			failedQuery[currentCase] = append(failedQuery[currentCase], query)
-			return
+		// now compare the results
+		equals := false
+		if strict {
+			equals = result1.nonOrderCompare(result2)
+		} else {
+			equals = result1.nonOrderCompare(result2)
 		}
-		for rowIndex, row := range queryData1 {
-			//var line string
-			for colIndex, col := range row {
-				if len(row) != len(queryData2[rowIndex]) {
-					log.Info("result column length not equals", zap.Int("db1", len(row)), zap.Int("db2", len(queryData2[rowIndex])))
-					failedQuery[currentCase] = append(failedQuery[currentCase], query)
-					return
-				}
 
-				cv1 := string(col)
-				cv2 := string(queryData2[rowIndex][colIndex])
-				//driver not support column type
-				if cv1 != cv2 {
-					//maybe it's json
-					if (strings.HasPrefix(cv1, "{") && strings.HasPrefix(cv1, "{")) || (strings.HasPrefix(cv1, "{") && strings.HasPrefix(cv1, "{")) {
-						if !jsonEquals(cv1, cv2) {
-							log.Info("result json value not equals", zap.Int("row", rowIndex+1), zap.Int("col", colIndex+1), zap.String("cv1", cv1), zap.String("cv2", cv2))
-							fmt.Printf("db1 1query result\n%v\n", result1)
-							fmt.Printf("db2 1query result\n%v\n", result2)
-							failedQuery[currentCase] = append(failedQuery[currentCase], query)
-							return
-						}
-					} else {
-						log.Info("result value not equals", zap.Int("row", rowIndex+1), zap.Int("col", colIndex+1), zap.String("db1", cv1), zap.String("db2", cv2))
-						fmt.Printf("db1 1query result\n%v\n", result1)
-						fmt.Printf("db2 1query result\n%v\n", result2)
-						failedQuery[currentCase] = append(failedQuery[currentCase], query)
-						return
-					}
-				}
-			}
+		if equals {
+			log.Info("done with no difference", zap.Int("result size", len(result1.data)))
+		} else {
+			failedQuery[currentCase] = append(failedQuery[currentCase], query)
 		}
-		log.Info("done with no difference", zap.Int("result size", len(result1.data)))
 	}
 }
 
@@ -82,6 +55,7 @@ type SqlQueryResult struct {
 	columnTypes []*sql.ColumnType
 }
 
+// readable query result like mysql shell client
 func (result *SqlQueryResult) String() string {
 	if result.data == nil || result.header == nil {
 		return "no result"
@@ -143,6 +117,81 @@ func (result *SqlQueryResult) String() string {
 	return strings.Join(lines, "\n")
 }
 
+//return true if two result is equals with order
+func (result *SqlQueryResult) strictCompare(result2 *SqlQueryResult) bool {
+	queryData1 := result.data
+	queryData2 := result2.data
+	if len(queryData1) != len(queryData2) {
+		log.Info("result length not equals", zap.Int("db1", len(queryData1)), zap.Int("db2", len(queryData2)))
+		return false
+	}
+
+	for rowIndex, row := range queryData1 {
+		if !compareRow(rowIndex, row, queryData2[rowIndex]) {
+			fmt.Printf("db1 1query result\n%v\n", result)
+			fmt.Printf("db2 1query result\n%v\n", result2)
+			return false
+		}
+	}
+	return true
+}
+
+// compare two query result without ordered
+func (result *SqlQueryResult) nonOrderCompare(result2 *SqlQueryResult) bool {
+	queryData1 := result.data
+	queryData2 := result2.data
+	if len(queryData1) != len(queryData2) {
+		log.Info("result length not equals", zap.Int("db1", len(queryData1)), zap.Int("db2", len(queryData2)))
+		return false
+	}
+	var checkedRowArray = make([]bool, len(queryData1))
+	for rowIndex, row := range queryData1 {
+		hasOneEquals := false
+		for checkIndex, checked := range checkedRowArray {
+			if !checked {
+				equals := compareRow(rowIndex, row, queryData2[checkIndex])
+				if equals {
+					checkedRowArray[checkIndex] = true
+					hasOneEquals = true
+					break
+				}
+			}
+		}
+		if !hasOneEquals {
+			fmt.Printf("db1 1query result\n%v\n", result)
+			fmt.Printf("db2 1query result\n%v\n", result2)
+		}
+	}
+	return true
+}
+
+// compare two result row
+func compareRow(rowIndex int, row [][]byte, row2 [][]byte) bool {
+	//var line string
+	for colIndex, col := range row {
+		if len(row) != len(row2) {
+			log.Info("result column length not equals", zap.Int("db1", len(row)), zap.Int("db2", len(row2)))
+			return false
+		}
+
+		cv1 := string(col)
+		cv2 := string(row2[colIndex])
+		//driver not support column type
+		if cv1 != cv2 {
+			//maybe it's json
+			if (strings.HasPrefix(cv1, "{") && strings.HasPrefix(cv1, "{")) || (strings.HasPrefix(cv1, "{") && strings.HasPrefix(cv1, "{")) {
+				if !jsonEquals(cv1, cv2) {
+					log.Info("result json value not equals", zap.Int("row", rowIndex+1), zap.Int("col", colIndex+1), zap.String("cv1", cv1), zap.String("cv2", cv2))
+					return false
+				}
+			} else {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func getQueryResult(db *sql.DB, query string) (*SqlQueryResult, error) {
 	result, err := db.Query(query)
 	if err != nil {
@@ -182,6 +231,7 @@ func getAllTestCaseDir(dir string) []string {
 	return loadItemsFromDir(dir, true)
 }
 
+// load all items from a directory, sub directory or file base on the loadDirectory parameter
 func loadItemsFromDir(dir string, loadDirectory bool) []string {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
@@ -257,7 +307,10 @@ func prepareData(statement string) {
 	}
 }
 
-func SqlDiff(caseDir string, tidb, mysql *sql.DB) {
+var strict = true
+
+func SqlDiff(caseDir string, tidb, mysql *sql.DB, strictMode bool) {
+	strict = strictMode
 	db1 = tidb
 	db2 = mysql
 
