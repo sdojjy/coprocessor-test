@@ -350,9 +350,9 @@ var randTimeStampFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return "'2038-01-19 03:14:07.0000'"
 	},
-	func(flen int, dec int, col *ast.ColumnDef) string {
-		return "'000-00-00 00:00:00.0000'"
-	},
+	//func(flen int, dec int, col *ast.ColumnDef) string {
+	//	return "'000-00-00 00:00:00.0000'"
+	//},
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%s'", randTimestamp())
 	},
@@ -362,9 +362,9 @@ var randDateFuncArray = []func(int, int, *ast.ColumnDef) string{
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return "'1970-01-01'"
 	},
-	func(flen int, dec int, col *ast.ColumnDef) string {
-		return "'000-00-00'"
-	},
+	//func(flen int, dec int, col *ast.ColumnDef) string {
+	//	return "'000-00-00'"
+	//},
 	func(flen int, dec int, col *ast.ColumnDef) string {
 		return fmt.Sprintf("'%v'", gofakeit.Date().Format("2006-01-02"))
 	},
