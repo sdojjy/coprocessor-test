@@ -7,6 +7,7 @@ import (
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/mysql"
+	"github.com/sdojjy/coprocessor_test/util"
 	"log"
 	"math"
 	"math/rand"
@@ -87,7 +88,7 @@ func GenData(sql []byte, count int) string {
 				}
 			case ast.ConstraintIndex:
 				valueSet := getUniqueValueSet(constraint, int(float32(count)*0.4), columnMap, config)
-				data := valueSet.toSlice()
+				data := valueSet.ToSlice()
 				for index, item := range data {
 					valueStr := item.(string)
 					value := strings.Split(valueStr, "|")
@@ -113,7 +114,7 @@ func GenData(sql []byte, count int) string {
 
 			case ast.ConstraintUniq:
 				valueSet := getUniqueValueSet(constraint, count, columnMap, config)
-				for index, item := range valueSet.toSlice() {
+				for index, item := range valueSet.ToSlice() {
 					valueStr := item.(string)
 					value := strings.Split(valueStr, "|")
 					for keyIndex, key := range constraint.Keys {
@@ -159,9 +160,9 @@ func GenData(sql []byte, count int) string {
 	return insert.String()
 }
 
-func getUniqueValueSet(constraint *ast.Constraint, count int, columnMap map[string]*ast.ColumnDef, config genConfig) *Set {
+func getUniqueValueSet(constraint *ast.Constraint, count int, columnMap map[string]*ast.ColumnDef, config genConfig) *util.Set {
 	keys := constraint.Keys
-	valueSet := New()
+	valueSet := util.NewSet()
 	for valueSet.Size() < count {
 		var uniqueColumnsData bytes.Buffer
 		for _, key := range keys {
@@ -550,41 +551,4 @@ type indexTuple struct {
 type columnData struct {
 	filled bool
 	data   []string
-}
-
-type Set struct {
-	m map[interface{}]struct{}
-}
-
-func (s *Set) Contains(item interface{}) bool {
-	_, ok := s.m[item]
-	return ok
-}
-
-var Exists = struct{}{}
-
-func New(items ...interface{}) *Set {
-	s := &Set{}
-	s.m = make(map[interface{}]struct{})
-	s.Put(items...)
-	return s
-}
-
-func (s *Set) Put(items ...interface{}) error {
-	for _, item := range items {
-		s.m[item] = Exists
-	}
-	return nil
-}
-
-func (s *Set) Size() int {
-	return len(s.m)
-}
-
-func (s *Set) toSlice() []interface{} {
-	var data []interface{}
-	for key, _ := range s.m {
-		data = append(data, key)
-	}
-	return data
 }
