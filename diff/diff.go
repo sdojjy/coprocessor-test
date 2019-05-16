@@ -1,12 +1,16 @@
 package diff
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/fatih/color"
 	"github.com/pingcap/log"
 	"github.com/pingcap/parser"
+	"github.com/sergi/go-diff/diffmatchpatch"
 	"go.uber.org/zap"
 	"io/ioutil"
 	"os"
@@ -24,8 +28,8 @@ var total = 0
 func compareQuery(query string) {
 	total++
 	log.Info("comparing query result", zap.String("query", query))
-	result1, err1 := getQueryResult(db1, query)
-	result2, err2 := getQueryResult(db2, query)
+	tidbResult, err1 := getQueryResult(db1, query)
+	mysqlResult, err2 := getQueryResult(db2, query)
 	if err1 != nil && err2 != nil {
 		log.Error("execute failed on both db", zap.String("query", query), zap.String("err1", fmt.Sprintf("%v", err1)), zap.String("err2", fmt.Sprintf("%v", err2)))
 		failedQuery[currentCase] = append(failedQuery[currentCase], query)
@@ -36,13 +40,13 @@ func compareQuery(query string) {
 		// now compare the results
 		equals := false
 		if strict {
-			equals = result1.nonOrderCompare(result2)
+			equals = mysqlResult.strictCompare(tidbResult)
 		} else {
-			equals = result1.nonOrderCompare(result2)
+			equals = mysqlResult.nonOrderCompare(tidbResult)
 		}
 
 		if equals {
-			log.Info("done with no difference", zap.Int("result size", len(result1.data)))
+			log.Info("done with no difference", zap.Int("result size", len(tidbResult.data)))
 		} else {
 			failedQuery[currentCase] = append(failedQuery[currentCase], query)
 		}
@@ -118,9 +122,9 @@ func (result *SqlQueryResult) String() string {
 }
 
 //return true if two result is equals with order
-func (result *SqlQueryResult) strictCompare(result2 *SqlQueryResult) bool {
+func (result *SqlQueryResult) strictCompare(tidbResult *SqlQueryResult) bool {
 	queryData1 := result.data
-	queryData2 := result2.data
+	queryData2 := tidbResult.data
 	if len(queryData1) != len(queryData2) {
 		log.Info("result length not equals", zap.Int("db1", len(queryData1)), zap.Int("db2", len(queryData2)))
 		return false
@@ -128,8 +132,7 @@ func (result *SqlQueryResult) strictCompare(result2 *SqlQueryResult) bool {
 
 	for rowIndex, row := range queryData1 {
 		if !compareRow(rowIndex, row, queryData2[rowIndex]) {
-			fmt.Printf("db1 1query result\n%v\n", result)
-			fmt.Printf("db2 1query result\n%v\n", result2)
+			printColorDiff(result.String(), tidbResult.String())
 			return false
 		}
 	}
@@ -158,8 +161,7 @@ func (result *SqlQueryResult) nonOrderCompare(result2 *SqlQueryResult) bool {
 			}
 		}
 		if !hasOneEquals {
-			fmt.Printf("db1 1query result\n%v\n", result)
-			fmt.Printf("db2 1query result\n%v\n", result2)
+			printColorDiff(result.String(), result2.String())
 		}
 	}
 	return true
@@ -363,4 +365,24 @@ func jsonEquals(s1, s2 string) bool {
 		return false
 	}
 	return reflect.DeepEqual(o1, o2)
+}
+
+func printColorDiff(expect, actual string) {
+	green := color.New(color.FgGreen).SprintFunc()
+	red := color.New(color.FgRed).SprintFunc()
+	patch := diffmatchpatch.New()
+	diff := patch.DiffMain(expect, actual, false)
+	var newExpectedContent, newActualResult bytes.Buffer
+	for _, d := range diff {
+		switch d.Type {
+		case diffmatchpatch.DiffEqual:
+			newExpectedContent.WriteString(d.Text)
+			newActualResult.WriteString(d.Text)
+		case diffmatchpatch.DiffDelete:
+			newExpectedContent.WriteString(red(d.Text))
+		case diffmatchpatch.DiffInsert:
+			newActualResult.WriteString(green(d.Text))
+		}
+	}
+	fmt.Printf("Expected Result:\n%s\nActual Result:\n%s\n", newExpectedContent.String(), newActualResult.String())
 }
