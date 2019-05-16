@@ -48,6 +48,10 @@ func main() {
 			log.Error("connect to db failed", zap.String("err1", fmt.Sprintf("%v", err1)), zap.String("err2", fmt.Sprintf("%v", err2)))
 			os.Exit(-1)
 		}
+		defer func() {
+			tidb.Close()
+			mysql.Close()
+		}()
 		diff.SqlDiff(cliArgs.testDir, tidb, mysql, cliArgs.strictMode)
 	}
 }
