@@ -16,7 +16,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/mattn/go-colorable v0.1.1 // indirect
 	github.com/pingcap/errors v0.11.4
-	github.com/pingcap/failpoint v0.0.0-20190430075617-bf45ab20bfc4 // indirect
+	github.com/pingcap/failpoint v0.0.0-20190430075617-bf45ab20bfc4
 	github.com/pingcap/kvproto v0.0.0-20190425131531-4ed0aa16f7ea
 	github.com/pingcap/log v0.0.0-20190307075452-bd41d9273596
 	github.com/pingcap/parser v0.0.0-20190515092550-ea671bdadc9d

@@ -8,107 +8,118 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/mysql"
+	"github.com/pingcap/tidb/distsql"
+	"github.com/pingcap/tidb/expression"
+	"github.com/pingcap/tidb/session"
+	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/store/tikv"
 	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/codec"
+	"github.com/pingcap/tidb/util/ranger"
 	"github.com/prometheus/common/log"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"time"
 
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tipb/go-tipb"
-
-	"github.com/pingcap/tidb/config"
 )
 
-func send(clusterClient *ClusterClient, tikvAddr string, dbInfo *model.TableInfo, copRequest *tikvrpc.Request) error {
+func SendCopRequest(ctx context.Context, dbInfo *model.TableInfo, c *ClusterClient) error {
 
-	//tikvResp, err := clusterClient.RpcClient.SendRequest(context.Background(), tikvAddr, copRequest, time.Duration(time.Second * 3))
-	//if err != nil {
-	//	log.Fatal("coprocessor grpc call failed", err)
-	//}
-	//resp := tikvResp.Cop
-	//if resp.RegionError != nil || resp.OtherError != "" {
-	//	log.Fatal("coprocessor grpc call failed", resp.RegionError, resp.OtherError)
-	//}
-	//parseResponse(resp, getColumnsTypes(dbInfo.Columns))
-	return nil
-}
+	regionInfa, _ := GetRegions(TiDBConfig{Server: "127.0.0.1", Port: 10080}, "test", "a")
 
-func newTikvClient(addr string) *ClusterClient {
-	c, err := NewClient([]string{addr}, config.Security{})
-	if err != nil {
-		log.Error("Create client failed", fmt.Sprintf("err=%v", err))
-		return nil
-	}
-	return c
-}
+	//regionInfa, _ := c.GetTableRegion("test", "a")
 
-func buildCopRequest(ctx context.Context, dbInfo *model.TableInfo, c *ClusterClient) (*tikvrpc.Request, error) {
+	for _, region := range regionInfa.RecordRegions {
 
-	//c.ScanByRegion(ctx, dbInfo.ID, )
+		_, peer, _ := c.PdClient.GetRegionByID(ctx, region.ID)
 
-	regionInfa, _ := GetRegions(TiDBConfig{Server: "127.0.0.1", Port: 10080}, "mysql", "user")
+		bo := tikv.NewBackoffer(context.Background(), 20000)
+		keyLocation, _ := c.RegionCache.LocateRegionByID(bo, region.ID)
 
-	for _, region := range regionInfa.RegionIDs {
-
-		r, peer, _ := c.PdClient.GetRegionByID(ctx, region)
+		rpcContext, _ := c.RegionCache.GetRPCContext(bo, keyLocation.Region)
 
 		columnInfo := model.ColumnsToProto(dbInfo.Columns, dbInfo.PKIsHandle)
 		getColumnsTypes(dbInfo.Columns)
-		dag := &tipb.DAGRequest{}
-		executor := tipb.Executor{
-			Tp: tipb.ExecType_TypeTableScan,
-			TblScan: &tipb.TableScan{
+		dag := &tipb.DAGRequest{
+			StartTs:       math.MaxInt64,
+			OutputOffsets: []uint32{0, 1},
+			//Flags:226,
+			//TimeZoneName: "Asia/Chongqing",
+			//TimeZoneOffset:28800,
+			//EncodeType:tipb.EncodeType_TypeDefault,
+		}
+		//executor1 := tipb.Executor{
+		//	Tp: tipb.ExecType_TypeTableScan,
+		//	TblScan: &tipb.TableScan{
+		//		TableId: dbInfo.ID,
+		//		Columns: columnInfo,
+		//		Desc:    false,
+		//	},
+		//}
+
+		executor1 := tipb.Executor{
+			Tp: tipb.ExecType_TypeIndexScan,
+			IdxScan: &tipb.IndexScan{
 				TableId: dbInfo.ID,
+				IndexId: regionInfa.Indices[0].ID,
 				Columns: columnInfo,
 				Desc:    false,
 			},
 		}
-		dag.Executors = append(dag.Executors, &executor)
 
-		//full := ranger.FullRange()
-		rangeO := GetKeyRange(c, region)
-		keyRange := []kv.KeyRange{*rangeO} //distsql.TableRangesToKVRanges(dbInfo.ID, full, nil)
+		ss, _ := session.CreateSession(c.Storage)
+
+		expr, _ := expression.ParseSimpleExprWithTableInfo(ss, "id=2 or id=1", dbInfo)
+		exprPb := expression.NewPBConverter(c.Storage.GetClient(), &stmtctx.StatementContext{InSelectStmt: true}).ExprToPB(expr)
+		executor2 := tipb.Executor{
+			Tp: tipb.ExecType_TypeSelection,
+			Selection: &tipb.Selection{
+				Conditions: []*tipb.Expr{exprPb},
+			},
+		}
+		dag.Executors = append(dag.Executors, &executor1, &executor2)
+
+		full := ranger.FullIntRange(false)
+		//_, first := splitRanges(full, true, false)
+		//rangeO := GetKeyRange(c, region)
+		keyRange := distsql.TableRangesToKVRanges(dbInfo.ID, full, nil)
 		copRange := &copRanges{mid: keyRange}
+		fmt.Println(copRange.String())
 		data, _ := dag.Marshal()
 
-		var ctxt = kvrpcpb.Context{
-			//IsolationLevel: pbIsolationLevel(worker.req.IsolationLevel),
-			//Priority:       kvPriorityToCommandPri(worker.req.Priority),
-			//NotFillCache:   worker.req.NotFillCache,
-			HandleTime: true,
-			ScanDetail: true,
-
-			Peer:        peer,
-			RegionId:    region,
-			RegionEpoch: r.RegionEpoch,
-		}
-
-		cop := &coprocessor.Request{
-			Context: &ctxt,
-			Tp:      kv.ReqTypeDAG,
-			Data:    data,
-			Ranges:  copRange.toPBRanges(),
-		}
-
 		request := &tikvrpc.Request{
-			Type:    tikvrpc.CmdCop,
-			Cop:     cop,
-			Context: ctxt,
+			Type: tikvrpc.CmdCop,
+			Cop: &coprocessor.Request{
+				Tp:     kv.ReqTypeDAG,
+				Data:   data,
+				Ranges: copRange.toPBRanges(),
+			},
+
+			Context: kvrpcpb.Context{
+				//IsolationLevel: pbIsolationLevel(worker.req.IsolationLevel),
+				//Priority:       kvPriorityToCommandPri(worker.req.Priority),
+				//NotFillCache:   worker.req.NotFillCache,
+				HandleTime: true,
+				ScanDetail: true,
+			},
 		}
 
-		bo := tikv.NewBackoffer(context.Background(), 20000)
+		if e := tikvrpc.SetContext(request, rpcContext.Meta, rpcContext.Peer); e != nil {
+			log.Fatal(e)
+		}
+
 		addr, err := c.loadStoreAddr(ctx, bo, peer.StoreId)
 		if err != nil {
 			log.Fatal(err)
 		}
 		tikvResp, err := c.RpcClient.SendRequest(ctx, addr, request, readTimeout)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		resp := tikvResp.Cop
 		if resp.RegionError != nil || resp.OtherError != "" {
@@ -120,7 +131,7 @@ func buildCopRequest(ctx context.Context, dbInfo *model.TableInfo, c *ClusterCli
 		}
 
 	}
-	return nil, nil
+	return nil
 }
 
 func parseResponse(resp *coprocessor.Response, fs []*types.FieldType) {
@@ -133,7 +144,7 @@ func parseResponse(resp *coprocessor.Response, fs []*types.FieldType) {
 	location, _ := time.LoadLocation("")
 	chk := chunk.New(fs, 1024, 4096)
 	r := selectResult{selectResp: selectResp, fieldTypes: fs, location: location}
-	for len(r.selectResp.Chunks[r.respChkIdx].RowsData) != 0 {
+	for r.respChkIdx < len(r.selectResp.Chunks) && len(r.selectResp.Chunks[r.respChkIdx].RowsData) != 0 {
 		r.readRowsData(chk)
 		it := chunk.NewIterator4Chunk(chk)
 		for row := it.Begin(); row != it.End(); row = it.Next() {
@@ -152,11 +163,12 @@ func decodeTableRow(row chunk.Row, fs []*types.FieldType) error {
 	for i, f := range fs {
 		switch {
 		case f.Tp == mysql.TypeVarchar:
-			row.GetString(i)
+			fmt.Printf("%s\t", row.GetString(i))
 		case f.Tp == mysql.TypeLong:
-			row.GetInt64(i)
+			fmt.Printf("%d\t", row.GetInt64(i))
 		}
 	}
+	fmt.Println()
 	return nil
 }
 
@@ -192,8 +204,6 @@ type selectResult struct {
 
 	selectResp *tipb.SelectResponse
 	location   *time.Location
-
-	//ctx        sessionctx.Context
 }
 
 func (r *selectResult) readRowsData(chk *chunk.Chunk) (err error) {

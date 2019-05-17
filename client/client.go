@@ -4,9 +4,17 @@ import (
 	"context"
 	"fmt"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/parser/model"
+	"github.com/pingcap/tidb/domain"
+	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/server"
+	"github.com/pingcap/tidb/session"
+	"github.com/pingcap/tidb/sessionctx"
+	"github.com/pingcap/tidb/tablecodec"
 	"github.com/prometheus/common/log"
 	"github.com/qiffang/tools/util"
 	"math"
@@ -202,4 +210,100 @@ func (c *ClusterClient) loadStoreAddr(ctx context.Context, bo *tikv.Backoffer, i
 		}
 		return store.GetAddress(), nil
 	}
+}
+
+func (c *ClusterClient) GetTableInfo(dbName, tableName string) (*model.TableInfo, error) {
+	schema, err := c.Schema()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	tableVal, err := schema.TableByName(model.NewCIStr(dbName), model.NewCIStr(tableName))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return tableVal.Meta(), nil
+}
+
+func (c *ClusterClient) Schema() (infoschema.InfoSchema, error) {
+	sx, err := session.CreateSession(c.Storage)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return domain.GetDomain(sx.(sessionctx.Context)).InfoSchema(), nil
+}
+
+func (c *ClusterClient) GetTableRegion(dbName, tableName string) (*server.TableRegions, error) {
+	schema, err := c.Schema()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	tbl, err := schema.TableByName(model.NewCIStr(dbName), model.NewCIStr(tableName))
+	if err != nil {
+		return nil, errors.New("table is not found")
+	}
+	tableID := tbl.Meta().ID
+	// for record
+	startKey, endKey := tablecodec.GetTableHandleKeyRange(tableID)
+	recordRegionIDs, err := c.RegionCache.ListRegionIDsInKeyRange(tikv.NewBackoffer(context.Background(), 500), startKey, endKey)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	recordRegions, err := c.getRegionsMeta(recordRegionIDs)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	// for indices
+	indices := make([]server.IndexRegions, len(tbl.Indices()))
+	for i, index := range tbl.Indices() {
+		indexID := index.Meta().ID
+		indices[i].Name = index.Meta().Name.String()
+		indices[i].ID = indexID
+		startKey, endKey := tablecodec.GetTableIndexKeyRange(tableID, indexID)
+		rIDs, err := c.RegionCache.ListRegionIDsInKeyRange(tikv.NewBackoffer(context.Background(), 500), startKey, endKey)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		indices[i].Regions, err = c.getRegionsMeta(rIDs)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+
+	tableRegions := &server.TableRegions{
+		TableName:     tbl.Meta().Name.O,
+		TableID:       tableID,
+		Indices:       indices,
+		RecordRegions: recordRegions,
+	}
+	return tableRegions, nil
+
+}
+
+func (c *ClusterClient) getRegionsMeta(regionIDs []uint64) ([]server.RegionMeta, error) {
+	regions := make([]server.RegionMeta, len(regionIDs))
+	for i, regionID := range regionIDs {
+		meta, leader, err := c.RegionCache.PDClient().GetRegionByID(context.TODO(), regionID)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+
+		failpoint.Inject("errGetRegionByIDEmpty", func(val failpoint.Value) {
+			if val.(bool) {
+				meta = nil
+			}
+		})
+
+		if meta == nil {
+			return nil, errors.Errorf("region not found for regionID %q", regionID)
+		}
+		regions[i] = server.RegionMeta{
+			ID:          regionID,
+			Leader:      leader,
+			Peers:       meta.Peers,
+			RegionEpoch: meta.RegionEpoch,
+		}
+
+	}
+	return regions, nil
 }
