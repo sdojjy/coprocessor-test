@@ -105,8 +105,7 @@ func SendCopIndexScanRequest(ctx context.Context, tableInfo *model.TableInfo, c 
 }
 
 func SendCopTableScanRequest(ctx context.Context, tableInfo *model.TableInfo, c *ClusterClient) error {
-	regionInfa, _ := GetRegions(TiDBConfig{Server: "127.0.0.1", Port: 10080}, "test", "a")
-
+	regionInfa, _ := c.GetTableRegion(tableInfo.ID)
 	for _, region := range regionInfa.RecordRegions {
 		_, peer, _ := c.PdClient.GetRegionByID(ctx, region.ID)
 		log.Info("region id: ", region.ID)

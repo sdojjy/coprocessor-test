@@ -65,9 +65,10 @@ func NewClient(pdAddrs []string, security config.Security) (*ClusterClient, erro
 		return nil, err
 	}
 
+	pClid := &codecPDClient{pdCli}
 	return &ClusterClient{
-		PdClient:    pdCli,
-		RegionCache: tikv.NewRegionCache(pdCli),
+		PdClient:    pClid,
+		RegionCache: tikv.NewRegionCache(pClid),
 		RpcClient:   newRPCClient(security),
 		Storage:     storage,
 	}, nil
@@ -232,16 +233,15 @@ func (c *ClusterClient) Schema() (infoschema.InfoSchema, error) {
 	return domain.GetDomain(sx.(sessionctx.Context)).InfoSchema(), nil
 }
 
-func (c *ClusterClient) GetTableRegion(dbName, tableName string) (*server.TableRegions, error) {
+func (c *ClusterClient) GetTableRegion(tableID int64) (*server.TableRegions, error) {
 	schema, err := c.Schema()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	tbl, err := schema.TableByName(model.NewCIStr(dbName), model.NewCIStr(tableName))
-	if err != nil {
+	tbl, ok := schema.TableByID(tableID)
+	if !ok {
 		return nil, errors.New("table is not found")
 	}
-	tableID := tbl.Meta().ID
 	// for record
 	startKey, endKey := tablecodec.GetTableHandleKeyRange(tableID)
 	recordRegionIDs, err := c.RegionCache.ListRegionIDsInKeyRange(tikv.NewBackoffer(context.Background(), 500), startKey, endKey)

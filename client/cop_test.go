@@ -5,12 +5,22 @@ import (
 	"fmt"
 	"github.com/pingcap/tidb/config"
 	"github.com/pingcap/tidb/distsql"
+	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/util/ranger"
 	"testing"
 )
 
 func TestGetRegions(t *testing.T) {
-	tableRegion, err := getClient(t).GetTableRegion("test", "a")
+	c := getClient(t)
+	tableInfo, _ := c.GetTableInfo("test", "a")
+
+	// for record
+	startKey, _ := tablecodec.GetTableHandleKeyRange(tableInfo.ID)
+	region, perr, _ := c.PdClient.GetRegion(context.Background(), startKey)
+	fmt.Printf("%v, %v,", region, perr)
+	regionInfa, _ := GetRegions(TiDBConfig{Server: "127.0.0.1", Port: 10080}, "test", "a")
+	fmt.Printf("%v", regionInfa)
+	tableRegion, err := c.GetTableRegion(tableInfo.ID)
 	fmt.Printf("%v, %v", tableRegion, err)
 }
 
