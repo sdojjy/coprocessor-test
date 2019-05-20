@@ -38,33 +38,24 @@ func SendCopIndexScanRequest(ctx context.Context, tableInfo *model.TableInfo, c 
 
 		rpcContext, _ := c.RegionCache.GetRPCContext(bo, keyLocation.Region)
 
-		collectSummary := true
-		dag := &tipb.DAGRequest{
-			StartTs:       math.MaxInt64,
-			OutputOffsets: []uint32{0},
-			//Flags:226,
-			//TimeZoneName: "Asia/Chongqing",
-			//TimeZoneOffset:28800,
-			//EncodeType:tipb.EncodeType_TypeDefault,
-			CollectExecutionSummaries: &collectSummary,
-		}
-
 		var idxColx []*model.ColumnInfo
 		idxColx = append(idxColx, model.FindColumnInfo(tableInfo.Columns, "int_idx"))
-		executor1 := tipb.Executor{
-			Tp: tipb.ExecType_TypeIndexScan,
-			IdxScan: &tipb.IndexScan{
-				TableId: tableInfo.ID,
-				IndexId: regionInfa.Indices[0].ID,
-				Columns: model.ColumnsToProto(idxColx, tableInfo.PKIsHandle),
-				Desc:    false,
+		idxColx = append(idxColx, tableInfo.Columns[0])
+
+		dag := &tipb.DAGRequest{
+			StartTs:       math.MaxInt64,
+			OutputOffsets: []uint32{0, 1},
+			Executors: []*tipb.Executor{
+				{
+					Tp: tipb.ExecType_TypeIndexScan,
+					IdxScan: &tipb.IndexScan{
+						TableId: tableInfo.ID,
+						IndexId: regionInfa.Indices[0].ID,
+						Columns: model.ColumnsToProto(idxColx, tableInfo.PKIsHandle),
+						Desc:    false},
+				},
 			},
 		}
-
-		dag.Executors = append(dag.Executors, &executor1)
-
-		//_, first := splitRanges(full, true, false)
-		//rangeO := GetKeyRange(c, region)
 
 		full := ranger.FullIntRange(false)
 		keyRange, _ := distsql.IndexRangesToKVRanges(&stmtctx.StatementContext{InSelectStmt: true}, tableInfo.ID, tableInfo.Indices[0].ID, full, nil)
@@ -106,51 +97,10 @@ func SendCopIndexScanRequest(ctx context.Context, tableInfo *model.TableInfo, c 
 		}
 
 		if resp.Data != nil {
-			parseResponse(resp, []*types.FieldType{types.NewFieldType(mysql.TypeLong)})
+			parseResponse(resp, []*types.FieldType{types.NewFieldType(mysql.TypeLong), types.NewFieldType(mysql.TypeLong)})
 		}
 
 	}
-	return nil
-}
-
-func parseResponse(resp *coprocessor.Response, fs []*types.FieldType) {
-	var data []byte = resp.Data
-	selectResp := new(tipb.SelectResponse)
-	err := selectResp.Unmarshal(data)
-	if err != nil {
-		log.Fatal("parse response failed", err)
-	}
-	if selectResp.Error != nil {
-		log.Fatal("query failed ", selectResp.Error)
-	}
-	location, _ := time.LoadLocation("")
-	chk := chunk.New(fs, 1024, 4096)
-	r := selectResult{selectResp: selectResp, fieldTypes: fs, location: location}
-	for r.respChkIdx < len(r.selectResp.Chunks) && len(r.selectResp.Chunks[r.respChkIdx].RowsData) != 0 {
-		r.readRowsData(chk)
-		it := chunk.NewIterator4Chunk(chk)
-		for row := it.Begin(); row != it.End(); row = it.Next() {
-			err = decodeTableRow(row, r.fieldTypes)
-			if err != nil {
-				log.Fatal("decode failed", err)
-			}
-		}
-		chk.Reset()
-		r.respChkIdx++
-	}
-
-}
-
-func decodeTableRow(row chunk.Row, fs []*types.FieldType) error {
-	for i, f := range fs {
-		switch {
-		case f.Tp == mysql.TypeVarchar:
-			fmt.Printf("%s\t", row.GetString(i))
-		case f.Tp == mysql.TypeLong:
-			fmt.Printf("%d\t", row.GetInt64(i))
-		}
-	}
-	fmt.Println()
 	return nil
 }
 
@@ -228,19 +178,19 @@ func SendCopTableScanRequest(ctx context.Context, tableInfo *model.TableInfo, c 
 		executor4 := tipb.Executor{
 			Tp: tipb.ExecType_TypeLimit,
 			Limit: &tipb.Limit{
-				Limit: 1,
+				Limit: 2,
 			},
 		}
 
-		//executor5 := tipb.Executor{
-		//	Tp: tipb.ExecType_TypeTopN,
-		//	TopN: &tipb.TopN{
-		//		Limit: 2,
-		//		//OrderBy:
-		//	},
-		//}
+		executor5 := tipb.Executor{
+			Tp: tipb.ExecType_TypeTopN,
+			TopN: &tipb.TopN{
+				Limit: 1,
+				//OrderBy:
+			},
+		}
 
-		dag.Executors = append(dag.Executors, &executor1, &executor2, &executor4)
+		dag.Executors = append(dag.Executors, &executor1, &executor2, &executor4, &executor5)
 		full := ranger.FullIntRange(false)
 		keyRange := distsql.TableRangesToKVRanges(tableInfo.ID, full, nil)
 		copRange := &copRanges{mid: keyRange}
@@ -293,6 +243,47 @@ type selectResult struct {
 
 	selectResp *tipb.SelectResponse
 	location   *time.Location
+}
+
+func parseResponse(resp *coprocessor.Response, fs []*types.FieldType) {
+	var data []byte = resp.Data
+	selectResp := new(tipb.SelectResponse)
+	err := selectResp.Unmarshal(data)
+	if err != nil {
+		log.Fatal("parse response failed", err)
+	}
+	if selectResp.Error != nil {
+		log.Fatal("query failed ", selectResp.Error)
+	}
+	location, _ := time.LoadLocation("")
+	chk := chunk.New(fs, 1024, 4096)
+	r := selectResult{selectResp: selectResp, fieldTypes: fs, location: location}
+	for r.respChkIdx < len(r.selectResp.Chunks) && len(r.selectResp.Chunks[r.respChkIdx].RowsData) != 0 {
+		r.readRowsData(chk)
+		it := chunk.NewIterator4Chunk(chk)
+		for row := it.Begin(); row != it.End(); row = it.Next() {
+			err = decodeTableRow(row, r.fieldTypes)
+			if err != nil {
+				log.Fatal("decode failed", err)
+			}
+		}
+		chk.Reset()
+		r.respChkIdx++
+	}
+
+}
+
+func decodeTableRow(row chunk.Row, fs []*types.FieldType) error {
+	for i, f := range fs {
+		switch {
+		case f.Tp == mysql.TypeVarchar:
+			fmt.Printf("%s\t", row.GetString(i))
+		case f.Tp == mysql.TypeLong:
+			fmt.Printf("%d\t", row.GetInt64(i))
+		}
+	}
+	fmt.Println()
+	return nil
 }
 
 func (r *selectResult) readRowsData(chk *chunk.Chunk) (err error) {

@@ -9,6 +9,11 @@ import (
 	"testing"
 )
 
+func TestGetRegions(t *testing.T) {
+	tableRegion, err := getClient(t).GetTableRegion("test", "a")
+	fmt.Printf("%v, %v", tableRegion, err)
+}
+
 func TestGetTableInfo(t *testing.T) {
 	dbInfo, err := getClient(t).GetTableInfo("mysql", "tidb")
 	fmt.Printf("%v, %v", dbInfo, err)

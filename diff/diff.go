@@ -162,6 +162,7 @@ func (result *SqlQueryResult) nonOrderCompare(result2 *SqlQueryResult) bool {
 		}
 		if !hasOneEquals {
 			printColorDiff(result.String(), result2.String())
+			return false
 		}
 	}
 	return true
