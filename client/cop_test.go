@@ -14,13 +14,22 @@ func TestGetTableInfo(t *testing.T) {
 	fmt.Printf("%v, %v", dbInfo, err)
 }
 
-func TestSend(t *testing.T) {
+func TestSendIndexScan(t *testing.T) {
 	client := getClient(t)
 	dbInfo, err := client.GetTableInfo("test", "a")
 	if err != nil {
 		t.Fatal("get db info failed")
 	}
-	SendCopRequest(context.Background(), dbInfo, client)
+	SendCopIndexScanRequest(context.Background(), dbInfo, client)
+}
+
+func TestSendTableScan(t *testing.T) {
+	client := getClient(t)
+	dbInfo, err := client.GetTableInfo("test", "a")
+	if err != nil {
+		t.Fatal("get db info failed")
+	}
+	SendCopTableScanRequest(context.Background(), dbInfo, client)
 }
 
 func Test_range(t *testing.T) {

@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -19,77 +18,57 @@ import (
 	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/ranger"
 	"github.com/prometheus/common/log"
-	"io/ioutil"
 	"math"
-	"net/http"
 	"time"
 
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tipb/go-tipb"
 )
 
-func SendCopRequest(ctx context.Context, dbInfo *model.TableInfo, c *ClusterClient) error {
-
+func SendCopIndexScanRequest(ctx context.Context, tableInfo *model.TableInfo, c *ClusterClient) error {
 	regionInfa, _ := GetRegions(TiDBConfig{Server: "127.0.0.1", Port: 10080}, "test", "a")
-
-	//regionInfa, _ := c.GetTableRegion("test", "a")
 
 	for _, region := range regionInfa.RecordRegions {
 
 		_, peer, _ := c.PdClient.GetRegionByID(ctx, region.ID)
+		log.Info("region id: ", region.ID)
 
 		bo := tikv.NewBackoffer(context.Background(), 20000)
 		keyLocation, _ := c.RegionCache.LocateRegionByID(bo, region.ID)
 
 		rpcContext, _ := c.RegionCache.GetRPCContext(bo, keyLocation.Region)
 
-		columnInfo := model.ColumnsToProto(dbInfo.Columns, dbInfo.PKIsHandle)
-		getColumnsTypes(dbInfo.Columns)
+		collectSummary := true
 		dag := &tipb.DAGRequest{
 			StartTs:       math.MaxInt64,
-			OutputOffsets: []uint32{0, 1},
+			OutputOffsets: []uint32{0},
 			//Flags:226,
 			//TimeZoneName: "Asia/Chongqing",
 			//TimeZoneOffset:28800,
 			//EncodeType:tipb.EncodeType_TypeDefault,
+			CollectExecutionSummaries: &collectSummary,
 		}
-		//executor1 := tipb.Executor{
-		//	Tp: tipb.ExecType_TypeTableScan,
-		//	TblScan: &tipb.TableScan{
-		//		TableId: dbInfo.ID,
-		//		Columns: columnInfo,
-		//		Desc:    false,
-		//	},
-		//}
 
+		var idxColx []*model.ColumnInfo
+		idxColx = append(idxColx, model.FindColumnInfo(tableInfo.Columns, "int_idx"))
 		executor1 := tipb.Executor{
 			Tp: tipb.ExecType_TypeIndexScan,
 			IdxScan: &tipb.IndexScan{
-				TableId: dbInfo.ID,
+				TableId: tableInfo.ID,
 				IndexId: regionInfa.Indices[0].ID,
-				Columns: columnInfo,
+				Columns: model.ColumnsToProto(idxColx, tableInfo.PKIsHandle),
 				Desc:    false,
 			},
 		}
 
-		ss, _ := session.CreateSession(c.Storage)
+		dag.Executors = append(dag.Executors, &executor1)
 
-		expr, _ := expression.ParseSimpleExprWithTableInfo(ss, "id=2 or id=1", dbInfo)
-		exprPb := expression.NewPBConverter(c.Storage.GetClient(), &stmtctx.StatementContext{InSelectStmt: true}).ExprToPB(expr)
-		executor2 := tipb.Executor{
-			Tp: tipb.ExecType_TypeSelection,
-			Selection: &tipb.Selection{
-				Conditions: []*tipb.Expr{exprPb},
-			},
-		}
-		dag.Executors = append(dag.Executors, &executor1, &executor2)
-
-		full := ranger.FullIntRange(false)
 		//_, first := splitRanges(full, true, false)
 		//rangeO := GetKeyRange(c, region)
-		keyRange := distsql.TableRangesToKVRanges(dbInfo.ID, full, nil)
+
+		full := ranger.FullIntRange(false)
+		keyRange, _ := distsql.IndexRangesToKVRanges(&stmtctx.StatementContext{InSelectStmt: true}, tableInfo.ID, tableInfo.Indices[0].ID, full, nil)
 		copRange := &copRanges{mid: keyRange}
-		fmt.Println(copRange.String())
 		data, _ := dag.Marshal()
 
 		request := &tikvrpc.Request{
@@ -127,7 +106,7 @@ func SendCopRequest(ctx context.Context, dbInfo *model.TableInfo, c *ClusterClie
 		}
 
 		if resp.Data != nil {
-			parseResponse(resp, getColumnsTypes(dbInfo.Columns))
+			parseResponse(resp, []*types.FieldType{types.NewFieldType(mysql.TypeLong)})
 		}
 
 	}
@@ -140,6 +119,9 @@ func parseResponse(resp *coprocessor.Response, fs []*types.FieldType) {
 	err := selectResp.Unmarshal(data)
 	if err != nil {
 		log.Fatal("parse response failed", err)
+	}
+	if selectResp.Error != nil {
+		log.Fatal("query failed ", selectResp.Error)
 	}
 	location, _ := time.LoadLocation("")
 	chk := chunk.New(fs, 1024, 4096)
@@ -172,30 +154,137 @@ func decodeTableRow(row chunk.Row, fs []*types.FieldType) error {
 	return nil
 }
 
-func getDBInfo(addr string, dbName, tableName string) (*model.TableInfo, error) {
-	url := fmt.Sprintf("http://%s/schema/%s", addr, fmt.Sprintf("%s/%s", dbName, tableName))
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil && err == nil {
-			err = errClose
-		}
-	}()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		// Print response body directly if status is not ok.
-		fmt.Println(string(body))
-		return nil, err
-	}
+func SendCopTableScanRequest(ctx context.Context, tableInfo *model.TableInfo, c *ClusterClient) error {
+	regionInfa, _ := GetRegions(TiDBConfig{Server: "127.0.0.1", Port: 10080}, "test", "a")
 
-	db := &model.TableInfo{}
-	json.Unmarshal(body, db)
-	return db, nil
+	for _, region := range regionInfa.RecordRegions {
+		_, peer, _ := c.PdClient.GetRegionByID(ctx, region.ID)
+		log.Info("region id: ", region.ID)
+
+		bo := tikv.NewBackoffer(context.Background(), 20000)
+		keyLocation, _ := c.RegionCache.LocateRegionByID(bo, region.ID)
+
+		rpcContext, _ := c.RegionCache.GetRPCContext(bo, keyLocation.Region)
+
+		collectSummary := true
+		dag := &tipb.DAGRequest{
+			StartTs:       math.MaxInt64,
+			OutputOffsets: []uint32{0, 1, 2},
+			//Flags:226,
+			//TimeZoneName: "Asia/Chongqing",
+			//TimeZoneOffset:28800,
+			//EncodeType:tipb.EncodeType_TypeDefault,
+			CollectExecutionSummaries: &collectSummary,
+		}
+
+		columnInfo := model.ColumnsToProto(tableInfo.Columns, tableInfo.PKIsHandle)
+		executor1 := tipb.Executor{
+			Tp: tipb.ExecType_TypeTableScan,
+			TblScan: &tipb.TableScan{
+				TableId: tableInfo.ID,
+				Columns: columnInfo,
+				Desc:    false,
+			},
+		}
+
+		ss, _ := session.CreateSession(c.Storage)
+		expr, _ := expression.ParseSimpleExprWithTableInfo(ss, "name='aaa' or name='name' ", tableInfo)
+		exprPb := expression.NewPBConverter(c.Storage.GetClient(), &stmtctx.StatementContext{InSelectStmt: true}).ExprToPB(expr)
+		executor2 := tipb.Executor{
+			Tp: tipb.ExecType_TypeSelection,
+			Selection: &tipb.Selection{
+				Conditions: []*tipb.Expr{exprPb},
+			},
+		}
+
+		//stmts, _, err :=parser.New().Parse("select count(id) from test.a", "", "")
+		//parser.New().Parse(exprStr, "", "")
+		//for _, warn := range warns {
+		//	ctx.GetSessionVars().StmtCtx.AppendWarning(util.SyntaxWarn(warn))
+		//}
+		//if err != nil {
+		//
+		//}
+
+		//groupBy := []expression.Expression{childCols[1]}
+		//col := &expression.Column{Index: 0, RetType: types.NewFieldType(mysql.TypeLong)}
+		//aggFunc := aggregation.NewAggFuncDesc(ss, "count", []expression.Expression{col}, false)
+		//aggFuncs := []*aggregation.AggFuncDesc{aggFunc}
+		//aggExprPb := aggregation.AggFuncToPBExpr(&stmtctx.StatementContext{InSelectStmt: true}, c.Storage.GetClient(), aggFunc)
+		//pbConvert := expression.NewPBConverter(c.Storage.GetClient(), &stmtctx.StatementContext{InSelectStmt: true})
+		//groupByExprPb := pbConvert.ExprToPB(col)
+		//groupByExprPb := expression.GroupByItemToPB(&stmtctx.StatementContext{InSelectStmt: true}, c.Storage.GetClient(), col)
+
+		//aggExpr, _ := expression.ParseSimpleExprWithTableInfo(ss, " count(id) ", tableInfo)
+		//aggExprPb := expression.NewPBConverter(c.Storage.GetClient(),&stmtctx.StatementContext{InSelectStmt: true}).ExprToPB(aggExpr)
+		//executor3 := tipb.Executor{
+		//	Tp: tipb.ExecType_TypeAggregation,
+		//	Aggregation: &tipb.Aggregation{
+		//		AggFunc: []*tipb.Expr{aggExprPb},
+		//		GroupBy: []*tipb.Expr{groupByExprPb},
+		//	},
+		//}
+		//
+		executor4 := tipb.Executor{
+			Tp: tipb.ExecType_TypeLimit,
+			Limit: &tipb.Limit{
+				Limit: 1,
+			},
+		}
+
+		//executor5 := tipb.Executor{
+		//	Tp: tipb.ExecType_TypeTopN,
+		//	TopN: &tipb.TopN{
+		//		Limit: 2,
+		//		//OrderBy:
+		//	},
+		//}
+
+		dag.Executors = append(dag.Executors, &executor1, &executor2, &executor4)
+		full := ranger.FullIntRange(false)
+		keyRange := distsql.TableRangesToKVRanges(tableInfo.ID, full, nil)
+		copRange := &copRanges{mid: keyRange}
+		data, _ := dag.Marshal()
+
+		request := &tikvrpc.Request{
+			Type: tikvrpc.CmdCop,
+			Cop: &coprocessor.Request{
+				Tp:     kv.ReqTypeDAG,
+				Data:   data,
+				Ranges: copRange.toPBRanges(),
+			},
+
+			Context: kvrpcpb.Context{
+				//IsolationLevel: pbIsolationLevel(worker.req.IsolationLevel),
+				//Priority:       kvPriorityToCommandPri(worker.req.Priority),
+				//NotFillCache:   worker.req.NotFillCache,
+				HandleTime: true,
+				ScanDetail: true,
+			},
+		}
+
+		if e := tikvrpc.SetContext(request, rpcContext.Meta, rpcContext.Peer); e != nil {
+			log.Fatal(e)
+		}
+
+		addr, err := c.loadStoreAddr(ctx, bo, peer.StoreId)
+		if err != nil {
+			log.Fatal(err)
+		}
+		tikvResp, err := c.RpcClient.SendRequest(ctx, addr, request, readTimeout)
+		if err != nil {
+			return err
+		}
+		resp := tikvResp.Cop
+		if resp.RegionError != nil || resp.OtherError != "" {
+			log.Fatal("coprocessor grpc call failed", resp.RegionError, resp.OtherError)
+		}
+
+		if resp.Data != nil {
+			parseResponse(resp, getColumnsTypes(tableInfo.Columns))
+		}
+	}
+	return nil
 }
 
 type selectResult struct {
