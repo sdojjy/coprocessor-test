@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/pingcap/log"
-	"github.com/sdojjy/coprocessor_test/diff"
+	"github.com/sdojjy/coprocessor_test/diffrunner"
 	"github.com/sdojjy/coprocessor_test/randgen"
 	"github.com/sdojjy/coprocessor_test/util"
 	"go.uber.org/zap"
@@ -48,10 +48,9 @@ func main() {
 			log.Error("connect to db failed", zap.String("err1", fmt.Sprintf("%v", err1)), zap.String("err2", fmt.Sprintf("%v", err2)))
 			os.Exit(-1)
 		}
-		defer func() {
-			tidb.Close()
-			mysql.Close()
-		}()
-		diff.SqlDiff(cliArgs.testDir, tidb, mysql, cliArgs.strictMode)
+		defer func() { mysql.Close() }()
+		defer func() { tidb.Close() }()
+
+		diffrunner.SqlDiff(cliArgs.testDir, tidb, mysql, cliArgs.strictMode)
 	}
 }
