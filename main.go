@@ -27,7 +27,7 @@ func main() {
 	flag.StringVar(&cliArgs.dsn1, "dsn1", "root:@tcp(127.0.0.1:4000)/test?charset=utf8", "mysql or tidb connect  string")
 	flag.StringVar(&cliArgs.dsn2, "dsn2", "root:@tcp(127.0.0.1:3306)/test?charset=utf8", "mysql or tidb connect  string")
 	flag.StringVar(&cliArgs.testDir, "test-dir", "./tests/", "the base directory of test cases")
-	flag.BoolVar(&cliArgs.strictMode, "strict", true, "compare the sql result line by line with order")
+	flag.BoolVar(&cliArgs.strictMode, "strict", false, "compare the sql result line by line with order")
 
 	flag.BoolVar(&cliArgs.genData, "gen-data", false, "generate rand data base on the DML file")
 	flag.StringVar(&cliArgs.dmlFile, "ddl", "./ddl.sql", "the create table statements file")

@@ -244,10 +244,10 @@ func loadItemsFromDir(dir string, loadDirectory bool) []string {
 	var filesPaths []string
 	for _, f := range files {
 		if !loadDirectory && !f.IsDir() {
-			if f.Name() != "dml.sql" {
+			if strings.HasSuffix(f.Name(), ".sql") && f.Name() != "dml.sql" {
 				filesPaths = append(filesPaths, path.Join(dir, f.Name()))
 			} else {
-				log.Error("ignore dml.sql file")
+				log.Info("ignore dml.sql file")
 			}
 		} else if loadDirectory && f.IsDir() {
 			filesPaths = append(filesPaths, path.Join(dir, f.Name()))
@@ -305,7 +305,7 @@ func prepareData(statement string) {
 		row1, _ := result1.RowsAffected()
 		row2, _ := result2.RowsAffected()
 		if row1 != row2 {
-			log.Error("the affected row not the same", zap.String("rows", fmt.Sprintf("[%d,%d]", row1, row2)))
+			log.Warn("the affected row not the same", zap.String("query", statement), zap.String("rows", fmt.Sprintf("[%d,%d]", row1, row2)))
 		}
 	}
 }
